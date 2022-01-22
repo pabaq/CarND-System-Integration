@@ -2,9 +2,9 @@ from styx_msgs.msg import TrafficLight
 
 from utilities import *
 
-PUBLISHING_FREQUENCY = 20  # [Hz], publishing frequency
-NUM_LOOKAHEAD_PUB = 75  # number of waypoints to publish in ego vehicle's front
-NUM_LOOKAHEAD_LIGHT = 50  # traffic light detection zone in number of waypoints
+PUBLISHING_FREQUENCY = 25  # [Hz], publishing frequency
+NUM_LOOKAHEAD_PUB = 100  # number of waypoints to publish in ego vehicle's front
+NUM_LOOKAHEAD_LIGHT = 100  # traffic light detection zone in number of waypoints
 NUM_STOPLINE_THRES = 4  # come to stop this waypoint margin in front of stopline
 MAX_DECEL = -1.0  # [m/s**2], maximum deceleration
 UNKNOWN = -1  # flag for undefined stopline index
