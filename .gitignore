@@ -1,0 +1,12 @@
+*.py[cod]
+
+build
+devel
+install
+wsl2-network.ps1
+
+profile.tmp
+
+get-pip.py
+**.vscode/
+**.idea/
