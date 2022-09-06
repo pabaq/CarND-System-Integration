@@ -4,6 +4,8 @@ build
 devel
 install
 wsl2-network.ps1
+images/work/
+videos/work/
 
 profile.tmp
 

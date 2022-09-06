@@ -55,6 +55,7 @@ class WaypointTree(object):
         self.waypoints = waypoints.waypoints
         self.num_waypoints = len(self.waypoints)
         self.xy = [get_position_from(wp)[:-1] for wp in self.waypoints]
+        self.yaw = [get_yaw_from(wp.pose) for wp in self.waypoints]
         self.tree = KDTree(self.xy)
 
     def __getitem__(self, item):
@@ -77,22 +78,55 @@ class WaypointTree(object):
         else:
             return self.waypoints[item]
 
-    def get_closest_idx_from(self, message):
+    def get_closest_idx_from(self, position):
         """ Get reference waypoint index closest to provided message's position.
 
         Args:
-            message (Pose|PoseStamped|Waypoint|list):
-                the message to get the closest waypoint index for. If a list is
+            position (Pose|PoseStamped|Waypoint|list):
+                the position to get the closest waypoint index for. If a list is
                 passed, it must contain the position's coordinates.
 
         Returns:
             the index to the closest reference waypoint in the tree.
         """
-        if isinstance(message, list):
-            xy_position = message[:2]
+        if isinstance(position, list):
+            xy_position = position[:2]
         else:
-            xy_position = get_position_from(message)[:-1]
+            xy_position = get_position_from(position)[:-1]
         return self.tree.query(xy_position, 1)[1]
+
+    def get_closest_idx_in_front_of(self, position):
+        """ Get closest waypoint index in front of provided message's position.
+
+        Args:
+            position (Pose|PoseStamped|Waypoint|list):
+                the position to get the waypoint index for. If a list is passed,
+                it must contain the position's coordinates.
+
+        Returns:
+            the index to the closest reference waypoint in front of the provided
+             position
+        """
+        # Determine the closest reference waypoint to the provided position
+        closest_idx = self.get_closest_idx_from(position)
+        # Define vectors for the xy-coordinates of the closest waypoint, its
+        # predecessor, and the provided position
+        closest_xy = np.array(self.xy[closest_idx])
+        previous_xy = np.array(self.xy[closest_idx - 1])
+        position_xy = np.array(get_position_from(position)[:-1])
+        # Define a vector connecting the reference trajectory waypoints
+        reference_trajectory_vector = closest_xy - previous_xy
+        # Define a vector connecting the provided position with the closest
+        # reference waypoint
+        position_vector = position_xy - closest_xy
+        # Check if the provided position is ahead or behind the closest waypoint
+        # by taking the dot product
+        dot_product = np.dot(reference_trajectory_vector, position_vector)
+        # If the provided position is ahead of the closest waypoint, take the
+        # next waypoint on the reference trajectory
+        if dot_product > 0:
+            closest_idx = (closest_idx + 1) % self.num_waypoints
+        return closest_idx
 
     def get_cumulated_dists_from(self, start, stop):
         """ Get a vector of cumulated distances from a start to a stop waypoint.
@@ -145,7 +179,9 @@ def get_position_from(message):
     Returns:
         position list [x, y, z]
     """
-    if isinstance(message, (Pose, PoseStamped)):
+    if isinstance(message, list):
+        return message
+    elif isinstance(message, (Pose, PoseStamped)):
         return [message.pose.position.x,
                 message.pose.position.y,
                 message.pose.position.z]

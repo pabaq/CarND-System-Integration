@@ -4,24 +4,11 @@ import numpy as np
 
 from std_msgs.msg import Int32
 from geometry_msgs.msg import PoseStamped, TwistStamped
-from styx_msgs.msg import Lane, Waypoint
+from styx_msgs.msg import Lane, Waypoint, TrafficLight
 
 from utilities import *
 
-'''
-This node will publish waypoints from the car's current position to some `x` 
-distance ahead.
-
-As mentioned in the doc, you should ideally first implement a version which does 
-not care about traffic lights or obstacles.
-
-Once you have created dbw_node, you will update this node to use the status of 
-traffic lights too.
-
-Please note that our simulator also provides the exact location of traffic 
-lights and their current status in `/vehicle/traffic_lights` message. You can 
-use this message to build this node as well as to verify your TL classifier.
-'''
+NUM_STOPLINE_THRES = 4  # come to stop this waypoint margin in front of stopline
 
 
 class WaypointUpdater(object):
@@ -30,6 +17,7 @@ class WaypointUpdater(object):
     def __init__(self):
         # Initialize the /waypoint_updater node
         rospy.init_node('waypoint_updater')
+
         # Subscribe to the required topics, which are
         # - the reference waypoints to be followed by the ego vehicle
         rospy.Subscriber('/base_waypoints', Lane, self.base_waypoints_cb)
@@ -107,30 +95,6 @@ class WaypointUpdater(object):
     def obstacle_cb(self, msg):
         pass
 
-    def get_closest_reference_waypoint_idx(self):
-        """ Get the closest waypoint index in front of the ego vehicle. """
-
-        # Determine the closest reference waypoint to the ego vehicle
-        ego_wp_idx = self.tree.get_closest_idx_from(self.current_pose)
-        # Define vectors for the xy-coordinates of the closest waypoint, its
-        # predecessor, and the ego vehicle's current position
-        closest_xy = np.array(self.tree.xy[ego_wp_idx])
-        previous_xy = np.array(self.tree.xy[ego_wp_idx - 1])
-        ego_xy = np.array(get_position_from(self.current_pose)[:UNKNOWN])
-        # Define a vector connecting the reference trajectory waypoints
-        reference_trajectory_vector = closest_xy - previous_xy
-        # Define a vector connecting the ego vehicle's current position with the
-        # closest reference waypoint
-        ego_vector = ego_xy - closest_xy
-        # Check if the ego vehicle is ahead or behind the closest waypoint
-        # by taking the dot product
-        dot_product = np.dot(reference_trajectory_vector, ego_vector)
-        # If the ego vehicle is ahead of the closest waypoint, take the next
-        # waypoint on the reference trajectory
-        if dot_product > 0:
-            ego_wp_idx = (ego_wp_idx + 1) % self.tree.num_waypoints
-        return ego_wp_idx
-
     def decelerate(self, ego_idx):
         """ Decelerate ego vehicle from its current position to the stopline.
 
@@ -141,12 +105,12 @@ class WaypointUpdater(object):
         # Initialize the updated waypoint's list
         updated_waypoints = []
         # The waypoints' linear speed will be updated up to the lookahead dist
-        lookahead_idx = ego_idx + NUM_LOOKAHEAD_PUB
+        lookahead_idx = ego_idx + NUM_LOOKAHEAD
         # The ego vehicle's linear speed shall be zero at the light's stopline
         stop_idx = self.stop_idx - NUM_STOPLINE_THRES
 
         if self.stop_idx != UNKNOWN:
-            self.logger.info('Stopline (idx|pos): %19i | %7.2f %7.2f',
+            self.logger.info('Stopline (idx | pos): %19i | %7.2f %7.2f',
                              stop_idx, *self.tree.xy[stop_idx])
 
         if ego_idx < stop_idx:
@@ -175,14 +139,23 @@ class WaypointUpdater(object):
         """ Publish next NUM_LOOKAHEAD reference waypoints to be followed. """
 
         self.logger.reset()
-        # Index of the closest reference waypoint in front of the ego vehicle
-        ego_idx = self.get_closest_reference_waypoint_idx()
 
-        self.logger.info('Ego vehicle (idx|pos): %16i | %7.2f %7.2f',
-                         ego_idx, *self.tree.xy[ego_idx])
+        # Index of the closest reference waypoint in front of the ego vehicle
+        ego_idx = self.tree.get_closest_idx_in_front_of(self.current_pose)
+        self.logger.info('Ref Index: %4i', ego_idx)
+        self.logger.info('Ref Pose (x y yaw): %9.2f%9.2f%+9.4f',
+                         self.tree.xy[ego_idx][0],
+                         self.tree.xy[ego_idx][1],
+                         self.tree.yaw[ego_idx])
+
+        # The ego vehicles current position and yaw
+        ego_x, ego_y = get_position_from(self.current_pose)[:-1]
+        ego_yaw = get_yaw_from(self.current_pose)
+        self.logger.info('Ego Pose (x y yaw): %9.2f%9.2f%+9.4f\n',
+                         ego_x, ego_y, ego_yaw)
 
         # Index of the waypoint in lookahead distance
-        lookahead_idx = ego_idx + NUM_LOOKAHEAD_PUB
+        lookahead_idx = ego_idx + NUM_LOOKAHEAD
         # The waypoints are published using a Lane message
         lane = Lane()
         lane.header = self.tree.header

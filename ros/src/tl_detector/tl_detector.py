@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import math
+import os.path
 
 import rospy
 import tf
@@ -17,14 +18,9 @@ from light_classification.tl_classifier import TLClassifier
 
 from utilities import *
 
-'''
-/vehicle/traffic_lights provides you with the location of the traffic light in 
-3D map space and helps you acquire an accurate ground truth data source for the 
-traffic light classifier by sending the current color state of all traffic 
-lights in the simulator. When testing on the vehicle, the color state will not 
-be available. You'll need to rely on the position of the light and the camera 
-image to predict it. 
-'''
+# used for logging
+LIGHT_STATES_LOG = {TrafficLight.UNKNOWN: "Unknown", TrafficLight.RED: "red",
+                    TrafficLight.YELLOW: "yellow", TrafficLight.GREEN: "green"}
 
 
 class TLDetector(object):
@@ -45,11 +41,11 @@ class TLDetector(object):
         # - the images taken from the car's camera
         rospy.Subscriber('/image_color', Image, self.image_color_cb)
 
-        # Initialize
         # - the /traffic_waypoint publisher, which will provide the waypoint
         #   index of the nearest red traffic light in front of the ego vehicle
         self.traffic_light_pub = rospy.Publisher('/traffic_waypoint', Int32,
                                                  queue_size=1)
+
         # - the WaypointTree instance of the reference waypoints
         self.tree = None  # type: WaypointTree | None
         # - the ego vehicle's current pose
@@ -60,22 +56,19 @@ class TLDetector(object):
         self.traffic_lights = []  # type: list[TrafficLight]
         # - the current camera image
         self.current_camera_image = None
-
-        # Initialize other required attributes
-        # Load the traffic light's stop line positions and the camera info
-        self.config = yaml.load(rospy.get_param("/traffic_light_config"))
-        self.stoplines = self.config["stop_line_positions"]  # type: list[list]
+        # - the current traffic light state and location
         self.current_light_state = TrafficLight.UNKNOWN
-        self.current_stopline_idx = -1
-        # self.previous_light_location = None
-        self.has_image = False
+        self.current_stopline_idx = UNKNOWN
+        # - the traffic light classifier and required helper classes
+        self.light_classifier = TLClassifier()
+        self.bridge = CvBridge()
+        self.listener = tf.TransformListener()
+        # Load the traffic light config data
+        self.config = yaml.load(rospy.get_param("/traffic_light_config"))
+        # Get the stopline positions (list of xy coordinates)
+        self.stoplines = self.config["stop_line_positions"]  # type: list[list]
         # Initialize the node's logger
         self.logger = Logger()
-
-        # TODO: Implement classifier later
-        # self.bridge = CvBridge()
-        # self.light_classifier = TLClassifier()
-        # self.listener = tf.TransformListener()
 
         rospy.spin()
 
@@ -127,8 +120,7 @@ class TLDetector(object):
                 image from car-mounted camera
         """
         self.logger.reset()
-        self.has_image = True  # TODO: Not used up to now
-        self.current_camera_image = image  # TODO: Not used up to now
+        self.current_camera_image = image
         stopline_idx, light_state = self.detect_next_traffic_light()
 
         if self.current_stopline_idx != stopline_idx:
@@ -139,15 +131,16 @@ class TLDetector(object):
         # If the current light state changed
         if self.current_light_state != light_state:
             self.logger.warn("The light's color changed to %s",
-                             LIGHT_STATES[light_state])
+                             LIGHT_STATES_LOG[light_state])
             self.current_light_state = light_state  # Store the new light state
         # If the current light state did not change
         else:
-            self.logger.info("Light color: %s", LIGHT_STATES[light_state])
+            self.logger.info("Light color: %s", LIGHT_STATES_LOG[light_state])
 
         # Only stop lines of red lights will be handled
         if light_state == TrafficLight.RED:
             self.traffic_light_pub.publish(Int32(stopline_idx))
+        # On all other cases the vehicle shall just keep moving
         else:
             self.traffic_light_pub.publish(Int32(UNKNOWN))
 
@@ -164,7 +157,7 @@ class TLDetector(object):
 
         # Begin the search if the required data is initialized
         if self.tree and self.current_pose and self.current_twist:
-            num_lookahead = NUM_LOOKAHEAD_LIGHT
+            num_lookahead = NUM_LOOKAHEAD
             # Index of closest reference waypoint to ego vehicle's current pose
             ego_idx = self.tree.get_closest_idx_from(self.current_pose)
             # Find closest upcoming traffic light within the lookahead distance
@@ -181,36 +174,22 @@ class TLDetector(object):
                     # Update the lookahead distance
                     num_lookahead = num_waypoints
 
-        # If a traffic light was found within the lookahead distance
-        if closest_light:
-            # Predict the traffic light's state
-            light_state = self.get_light_state(closest_light)
+        # If a traffic light was found within the lookahead distance and an
+        # image from the camera is available
+        if closest_light and self.current_camera_image:
+            # Convert the image message into opencv format
+            cv_image = self.bridge.imgmsg_to_cv2(self.current_camera_image,
+                                                 "bgr8")
+            # Classify the traffic light state
+            light_state = self.light_classifier.get_classification(cv_image)
             # Return the traffic light's reference waypoint index and its state
             return stopline_idx, light_state
-
-        # If no traffic light was found return dummy values
-        return UNKNOWN, TrafficLight.UNKNOWN
-
-    def get_light_state(self, traffic_light):
-        """ Determines the current color of the traffic light
-
-        Args:
-            traffic_light (TrafficLight): light to classify
-
-        Returns:
-            traffic light color ID (specified in styx_msgs/TrafficLight)
-
-        """
-
-        # TODO: Implement classification Later
-        # if not self.has_image:
-        #     self.previous_light_location = None
-        #     return False
-        # Get classification
-        # cv_image = self.bridge.imgmsg_to_cv2(self.camera_image, "bgr8")
-        # return self.light_classifier.get_classification(cv_image)
-
-        return traffic_light.state
+        # If no traffic light was detected
+        else:
+            # Reset the classifier's buffer
+            self.light_classifier.reset_buffer()
+            # Return dummy values for the stop line location and light state
+            return UNKNOWN, TrafficLight.UNKNOWN
 
 
 if __name__ == '__main__':
